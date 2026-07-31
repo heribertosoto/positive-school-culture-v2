@@ -394,7 +394,7 @@
   // Paste your Google Apps Script Web App URL here (see apps-script-backend.gs).
   // Leave the placeholder as-is and the site will fall back to a local demo.
   const CONFIG = {
-    SHEET_API_URL: "https://script.google.com/a/macros/posta.eyuboglu.k12.tr/s/AKfycbwNJYWu608crYZi5Ao-qmsGlwfMjexYCfWvslmCPeTw_yn--mHHKU0TSUJstD1_Bgug/exec"
+    SHEET_API_URL: "https://script.google.com/macros/s/AKfycbzpG2Kq2VShEP8F30ml00OuZ0vPNfvXsQkFwYm631JEysucLguJARtvTh5y9fIL1vu4/exec"
   };
   function usingBackend(){
     return CONFIG.SHEET_API_URL && CONFIG.SHEET_API_URL.indexOf("PASTE_YOUR") === -1;
@@ -457,14 +457,26 @@
   async function save(newEntry){
     if(usingBackend()){
       try{
-        await fetch(CONFIG.SHEET_API_URL, {
+        const res = await fetch(CONFIG.SHEET_API_URL, {
           method:'POST',
           body: JSON.stringify({ action:'add', campus:newEntry.campus, category:newEntry.category, desc:newEntry.desc, name:newEntry.name })
         });
-      }catch(e){}
+        const text = await res.text();
+        try{
+          const data = JSON.parse(text);
+          return data.ok === true;
+        }catch(parseErr){
+          console.warn('Sheet backend did not return JSON — likely blocked or redirected to a login page:', text.slice(0,200));
+          return false;
+        }
+      }catch(e){
+        console.warn('Sheet backend request failed:', e);
+        return false;
+      }
     } else if(hasStorage){
-      try{ await window.storage.set(STORAGE_KEY, JSON.stringify(submissions), true); }catch(e){}
+      try{ await window.storage.set(STORAGE_KEY, JSON.stringify(submissions), true); return true; }catch(e){ return false; }
     }
+    return true;
   }
   function timeAgo(ts){
     const mins = Math.floor((Date.now()-ts)/60000);
@@ -513,13 +525,18 @@
     const newEntry = { id:nextId, campus, category, desc, name, status:'received', ts:Date.now(), response:'' };
     submissions.push(newEntry);
     render();
-    await save(newEntry);
-    if(usingBackend()) load(); // pick up the real ID assigned by the Sheet
+    const ok = await save(newEntry);
+    if(usingBackend() && ok) load(); // pick up the real ID assigned by the Sheet
     document.getElementById('f-desc').value='';
     document.getElementById('f-campus').value='';
     document.getElementById('f-name').value='';
-    msg.style.color = '#3F7E44';
-    msg.textContent = 'Added as case #' + String(nextId).padStart(4,'0') + '. Status: Received. 🎉';
+    if(ok){
+      msg.style.color = '#3F7E44';
+      msg.textContent = 'Added as case #' + String(nextId).padStart(4,'0') + '. Status: Received. 🎉';
+    } else {
+      msg.style.color = '#DD1367';
+      msg.textContent = "Saved to this page only — the Sheet backend didn't confirm it. Check the browser console or ask Claude to debug.";
+    }
   });
   load();
 
