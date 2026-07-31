@@ -618,13 +618,17 @@
     renderAdminCases();
   });
 
-  /* ---------- PITCH BUDDY (live AI chat) ---------- */
+  /* ---------- PITCH BUDDY (AI chat via your Apps Script + Gemini) ---------- */
   const log = document.getElementById('chat-log');
   const input = document.getElementById('chat-input');
   const sendBtn = document.getElementById('chat-send');
   const note = document.getElementById('buddy-note');
 
-  const SYSTEM_PROMPT = "You are Pitch Buddy, a warm, encouraging assistant inside a K-12 school climate platform called Positive School Culture. You help a student (age range roughly 8-18, so keep language simple and friendly) turn a vague complaint into a clear pitch for their school. Ask ONE short question at a time. Guide them through: (1) what's wrong, specifically, (2) why it matters / who it affects, (3) one concrete change they want, (4) who they should bring it to. Reference the platform's five commitments (Inclusion, Response, Transparency, Feedback Loop, Co-Design) naturally when relevant. After 3-5 exchanges, offer a short structured summary they could submit to the register. Keep every reply under 80 words. Never be preachy or robotic.";
+  if(usingBackend()){
+    note.textContent = "Powered by Gemini, running through your own Apps Script — works everywhere this page is hosted, including the public site.";
+  } else {
+    note.textContent = "Pitch Buddy needs a backend to work outside Claude. Connect CONFIG.SHEET_API_URL first (see apps-script-backend.gs).";
+  }
 
   let history = [];
 
@@ -642,6 +646,14 @@
   async function sendMessage(){
     const text = input.value.trim();
     if(!text) return;
+
+    if(!usingBackend()){
+      addMsg(text, 'user');
+      addMsg("I'm not connected to an AI yet — ask your team to add the Apps Script URL to CONFIG.SHEET_API_URL first.", 'bot');
+      input.value = '';
+      return;
+    }
+
     addMsg(text, 'user');
     history.push({ role:'user', content:text });
     input.value = '';
@@ -649,24 +661,23 @@
     const typingEl = addMsg('Pitch Buddy is thinking...', 'typing');
 
     try{
-      const response = await fetch("https://api.anthropic.com/v1/messages", {
+      const response = await fetch(CONFIG.SHEET_API_URL, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: "claude-sonnet-4-6",
-          max_tokens: 1000,
-          system: SYSTEM_PROMPT,
-          messages: history
-        })
+        body: JSON.stringify({ action: "chat", history: history })
       });
       const data = await response.json();
-      const reply = (data.content || []).map(b => b.text || '').join('').trim() || "Hmm, I lost my train of thought — can you say that again?";
       typingEl.remove();
-      addMsg(reply, 'bot');
-      history.push({ role:'assistant', content:reply });
+      if(!data.ok){
+        addMsg("Pitch Buddy hit a snag: " + (data.error || "unknown error") + ". Try again in a moment.", 'bot');
+        history.pop();
+      } else {
+        addMsg(data.reply, 'bot');
+        history.push({ role:'assistant', content:data.reply });
+      }
     }catch(e){
       typingEl.remove();
-      addMsg("I can't reach the AI service right now. If you're viewing this outside Claude (like on GitHub Pages), this feature needs a small backend to relay the request safely — ask your team to wire that up.", 'bot');
+      addMsg("I couldn't reach the backend. Check your internet connection, or ask your team to double check the Apps Script deployment.", 'bot');
+      history.pop();
     }finally{
       input.disabled = false; sendBtn.disabled = false; input.focus();
     }
