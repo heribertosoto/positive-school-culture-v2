@@ -163,6 +163,21 @@
   .chat-send{ width:46px; height:46px; border-radius:50%; background:var(--green); color:#fff; border:none; font-size:18px; cursor:pointer; }
   .buddy-note{ padding:14px 26px 22px; font-size:12px; color:#B9C6D2; }
 
+  /* ADMIN */
+  .admin-wrap{ background:#fff; border:2px solid var(--orange); border-radius:var(--radius); padding:28px; margin-top:30px; }
+  .admin-lock{ display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+  .admin-lock input{ flex:1; min-width:200px; border:2px solid var(--line); border-radius:12px; padding:11px 14px; font-family:'Inter'; font-size:14.5px; }
+  .admin-status{ font-size:13px; font-weight:600; margin-top:10px; min-height:18px; }
+  .admin-case{ border:1.5px solid var(--line); border-radius:16px; padding:16px; margin-top:14px; }
+  .admin-case .row1{ display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:8px; }
+  .admin-case p.desc{ font-size:14px; color:var(--ink); margin:6px 0 10px; }
+  .admin-case select{ border:2px solid var(--line); border-radius:10px; padding:8px 10px; font-family:'Inter'; font-size:13.5px; }
+  .admin-case textarea{ width:100%; margin-top:8px; border:2px solid var(--line); border-radius:10px; padding:10px 12px; font-family:'Inter'; font-size:13.5px; min-height:60px; }
+  .admin-case .save-row{ display:flex; align-items:center; gap:12px; margin-top:8px; }
+  .admin-msg{ font-size:12.5px; font-weight:600; color:var(--green); }
+  .response-note{ margin-top:8px; background:var(--green-light); border-radius:12px; padding:10px 12px; font-size:13px; }
+  .response-note b{ color:var(--green); }
+
   /* FOOTER */
   footer{ padding:60px 0 90px; }
   .team{ display:grid; grid-template-columns:repeat(3,1fr); gap:18px; margin-top:22px; }
@@ -341,6 +356,23 @@
   </div>
 </section>
 
+<section id="admin">
+  <div class="wrap">
+    <div class="eyebrow">🔒 For school staff</div>
+    <h2 style="font-size:clamp(24px,3.4vw,32px); max-width:24ch;">Review cases &amp; respond</h2>
+    <p style="margin-top:12px; color:var(--ink-soft); max-width:60ch;">Staff use this panel to update a case's status and write the public response students see in the register above. It's protected by a shared staff password, not individual logins — enough for a pilot, not a substitute for real access control.</p>
+
+    <div class="admin-wrap">
+      <div class="admin-lock">
+        <input type="password" id="admin-pass" placeholder="Staff password">
+        <button class="btn btn-primary btn-sm" id="admin-unlock">Unlock</button>
+      </div>
+      <div class="admin-status" id="admin-status"></div>
+      <div id="admin-cases"></div>
+    </div>
+  </div>
+</section>
+
 <footer>
   <div class="wrap">
     <div class="eyebrow">The team</div>
@@ -358,6 +390,16 @@
 
 <script>
 (function(){
+  /* ---------- CONFIG ---------- */
+  // Paste your Google Apps Script Web App URL here (see apps-script-backend.gs).
+  // Leave the placeholder as-is and the site will fall back to a local demo.
+  const CONFIG = {
+    SHEET_API_URL: "https://script.google.com/a/macros/posta.eyuboglu.k12.tr/s/AKfycbwNJYWu608crYZi5Ao-qmsGlwfMjexYCfWvslmCPeTw_yn--mHHKU0TSUJstD1_Bgug/exec"
+  };
+  function usingBackend(){
+    return CONFIG.SHEET_API_URL && CONFIG.SHEET_API_URL.indexOf("PASTE_YOUR") === -1;
+  }
+
   /* ---------- REGISTER ---------- */
   const STORAGE_KEY = 'submissions';
   const hasStorage = typeof window.storage !== 'undefined';
@@ -385,17 +427,42 @@
 
   let submissions = null;
 
+  async function fetchFromBackend(){
+    try{
+      const res = await fetch(CONFIG.SHEET_API_URL);
+      const data = await res.json();
+      return data.map(r => ({
+        id: Number(r.id), campus: r.campus, category: r.category, desc: r.desc,
+        name: r.name, status: r.status || 'received', ts: Number(r.ts) || Date.now(),
+        response: r.response || ''
+      }));
+    }catch(e){ return null; }
+  }
+
   async function load(){
-    if(hasStorage){
+    if(usingBackend()){
+      const fromSheet = await fetchFromBackend();
+      submissions = fromSheet && fromSheet.length ? fromSheet : seed.slice();
+    } else if(hasStorage){
       try{
         const res = await window.storage.get(STORAGE_KEY, true);
         submissions = res ? JSON.parse(res.value) : seed.slice();
       }catch(e){ submissions = seed.slice(); }
-    } else { submissions = seed.slice(); }
+    } else {
+      submissions = seed.slice();
+    }
     render();
   }
-  async function save(){
-    if(hasStorage){
+
+  async function save(newEntry){
+    if(usingBackend()){
+      try{
+        await fetch(CONFIG.SHEET_API_URL, {
+          method:'POST',
+          body: JSON.stringify({ action:'add', campus:newEntry.campus, category:newEntry.category, desc:newEntry.desc, name:newEntry.name })
+        });
+      }catch(e){}
+    } else if(hasStorage){
       try{ await window.storage.set(STORAGE_KEY, JSON.stringify(submissions), true); }catch(e){}
     }
   }
@@ -423,6 +490,7 @@
         </div>
         <p>${s.desc}</p>
         <div class="meta">${s.campus || 'Campus not specified'} · ${s.name || 'Anonymous'} · ${timeAgo(s.ts)}</div>
+        ${s.response ? `<div class="response-note"><b>School response:</b> ${s.response}</div>` : ''}
       `;
       list.appendChild(el);
     });
@@ -442,8 +510,11 @@
     const msg = document.getElementById('form-msg');
     if(!desc){ msg.style.color = '#DD1367'; msg.textContent = 'Add a short description first.'; return; }
     const nextId = submissions.reduce((m,s)=>Math.max(m,s.id),0) + 1;
-    submissions.push({ id:nextId, campus, category, desc, name, status:'received', ts:Date.now() });
-    render(); await save();
+    const newEntry = { id:nextId, campus, category, desc, name, status:'received', ts:Date.now(), response:'' };
+    submissions.push(newEntry);
+    render();
+    await save(newEntry);
+    if(usingBackend()) load(); // pick up the real ID assigned by the Sheet
     document.getElementById('f-desc').value='';
     document.getElementById('f-campus').value='';
     document.getElementById('f-name').value='';
@@ -451,6 +522,84 @@
     msg.textContent = 'Added as case #' + String(nextId).padStart(4,'0') + '. Status: Received. 🎉';
   });
   load();
+
+  /* ---------- ADMIN PANEL ---------- */
+  const adminPassInput = document.getElementById('admin-pass');
+  const adminUnlockBtn = document.getElementById('admin-unlock');
+  const adminStatus = document.getElementById('admin-status');
+  const adminCasesEl = document.getElementById('admin-cases');
+  let staffPassword = '';
+
+  function renderAdminCases(){
+    adminCasesEl.innerHTML = '';
+    submissions.slice().sort((a,b)=>b.ts-a.ts).forEach(s=>{
+      const el = document.createElement('div');
+      el.className = 'admin-case';
+      el.innerHTML = `
+        <div class="row1">
+          <span class="case">#${String(s.id).padStart(4,'0')}</span>
+          <span class="catchip" style="background:${categoryColor[s.category] || '#19486A'};">${s.category}</span>
+          <span style="font-size:12px; color:var(--ink-soft);">${s.campus || 'No campus'} · ${s.name || 'Anonymous'}</span>
+        </div>
+        <p class="desc">${s.desc}</p>
+        <label style="font-size:12.5px; font-weight:700;">Status</label><br>
+        <select data-id="${s.id}" class="status-select">
+          ${Object.keys(statusMeta).map(k => `<option value="${k}" ${k===s.status?'selected':''}>${statusMeta[k].label}</option>`).join('')}
+        </select>
+        <textarea data-id="${s.id}" class="response-input" placeholder="Write the public response for this case...">${s.response || ''}</textarea>
+        <div class="save-row">
+          <button class="btn btn-primary btn-sm save-case" data-id="${s.id}">Save update</button>
+          <span class="admin-msg" data-msg-id="${s.id}"></span>
+        </div>
+      `;
+      adminCasesEl.appendChild(el);
+    });
+
+    adminCasesEl.querySelectorAll('.save-case').forEach(btn=>{
+      btn.addEventListener('click', async ()=>{
+        const id = btn.getAttribute('data-id');
+        const status = adminCasesEl.querySelector(`.status-select[data-id="${id}"]`).value;
+        const response = adminCasesEl.querySelector(`.response-input[data-id="${id}"]`).value;
+        const msgEl = adminCasesEl.querySelector(`[data-msg-id="${id}"]`);
+
+        if(usingBackend()){
+          try{
+            const res = await fetch(CONFIG.SHEET_API_URL, {
+              method:'POST',
+              body: JSON.stringify({ action:'update', id, status, response, password: staffPassword })
+            });
+            const data = await res.json();
+            if(!data.ok){ msgEl.style.color='#DD1367'; msgEl.textContent = data.error || 'Could not save.'; return; }
+          }catch(e){ msgEl.style.color='#DD1367'; msgEl.textContent = 'Network error.'; return; }
+        } else {
+          const s = submissions.find(x => String(x.id) === String(id));
+          if(s){ s.status = status; s.response = response; }
+          await save();
+        }
+        const s = submissions.find(x => String(x.id) === String(id));
+        if(s){ s.status = status; s.response = response; }
+        render();
+        msgEl.style.color = 'var(--green)';
+        msgEl.textContent = 'Saved ✓';
+      });
+    });
+  }
+
+  adminUnlockBtn.addEventListener('click', async ()=>{
+    staffPassword = adminPassInput.value;
+    if(!staffPassword){ adminStatus.style.color='#DD1367'; adminStatus.textContent='Enter the staff password first.'; return; }
+
+    if(!usingBackend()){
+      adminStatus.style.color = '#DD1367';
+      adminStatus.textContent = "No Sheet backend connected yet — set CONFIG.SHEET_API_URL first (see apps-script-backend.gs). Showing local demo cases below; changes here won't be checked against a real password.";
+      renderAdminCases();
+      return;
+    }
+    adminStatus.style.color = 'var(--green)';
+    adminStatus.textContent = 'Loaded. Edit a case and click Save — the password is checked when you save, not now.';
+    await load();
+    renderAdminCases();
+  });
 
   /* ---------- PITCH BUDDY (live AI chat) ---------- */
   const log = document.getElementById('chat-log');
