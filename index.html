@@ -652,12 +652,16 @@
   }];
 
   let submissions = null;
+  let historyLog = []; // [{caseId, timestamp, status, response}, ...]
 
   async function fetchFromBackend(){
     try{
       const res = await fetch(CONFIG.SHEET_API_URL);
       const data = await res.json();
-      return data.map(r => ({
+      historyLog = (data.history || []).map(h => ({
+        caseId: Number(h.caseId), timestamp: Number(h.timestamp), status: h.status, response: h.response || ''
+      }));
+      return (data.submissions || []).map(r => ({
         id: Number(r.id), campus: r.campus, category: r.category, desc: r.desc,
         name: r.name, status: r.status || 'received', ts: Number(r.ts) || Date.now(),
         response: r.response || ''
@@ -712,6 +716,24 @@
     if(hrs < 24) return hrs + 'h ago';
     return Math.floor(hrs/24) + 'd ago';
   }
+  function renderResponseThread(caseId, fallbackResponse){
+    const entries = historyLog
+      .filter(h => h.caseId === caseId && h.response)
+      .sort((a,b) => a.timestamp - b.timestamp);
+
+    if(entries.length === 0){
+      // No history log yet (e.g. demo mode, or an update made before this feature existed) —
+      // fall back to showing the single latest response if one exists.
+      return fallbackResponse ? `<div class="response-note"><b>School response:</b> ${fallbackResponse}</div>` : '';
+    }
+
+    return entries.map(h => `
+      <div class="response-note">
+        <b>School response — ${new Date(h.timestamp).toLocaleDateString()}:</b> ${h.response}
+      </div>
+    `).join('');
+  }
+
   function render(){
     const list = document.getElementById('reg-list');
     list.innerHTML = '';
@@ -736,7 +758,7 @@
         </div>
         <p>${s.desc}</p>
         <div class="meta">${s.campus || 'Campus not specified'} · ${s.name || 'Anonymous'} · ${timeAgo(s.ts)}</div>
-        ${s.response ? `<div class="response-note"><b>School response:</b> ${s.response}</div>` : ''}
+        ${renderResponseThread(s.id, s.response)}
       `;
       list.appendChild(el);
     });
@@ -838,6 +860,15 @@
   function renderAdminCases(){
     adminCasesEl.innerHTML = '';
     submissions.slice().sort((a,b)=>b.ts-a.ts).forEach(s=>{
+      const pastEntries = historyLog
+        .filter(h => h.caseId === s.id && h.response)
+        .sort((a,b) => a.timestamp - b.timestamp);
+      const historyHtml = pastEntries.length
+        ? `<div style="margin:10px 0; padding:10px 12px; background:var(--bg); border-radius:10px;">
+            ${pastEntries.map(h => `<div style="font-size:12.5px; margin-bottom:6px;"><b>${new Date(h.timestamp).toLocaleDateString()} (${statusMeta[h.status] ? statusMeta[h.status].label : h.status}):</b> ${h.response}</div>`).join('')}
+          </div>`
+        : '';
+
       const el = document.createElement('div');
       el.className = 'admin-case';
       el.innerHTML = `
@@ -847,11 +878,12 @@
           <span style="font-size:12px; color:var(--ink-soft);">${s.campus || 'No campus'} · ${s.name || 'Anonymous'}</span>
         </div>
         <p class="desc">${s.desc}</p>
+        ${historyHtml}
         <label style="font-size:12.5px; font-weight:700;">Status</label><br>
         <select data-id="${s.id}" class="status-select">
           ${Object.keys(statusMeta).map(k => `<option value="${k}" ${k===s.status?'selected':''}>${statusMeta[k].label}</option>`).join('')}
         </select>
-        <textarea data-id="${s.id}" class="response-input" placeholder="Write the public response for this case...">${s.response || ''}</textarea>
+        <textarea data-id="${s.id}" class="response-input" placeholder="Add a new update — this is appended, not overwritten..."></textarea>
         <div class="save-row">
           <button class="btn btn-primary btn-sm save-case" data-id="${s.id}">Save update</button>
           <span class="admin-msg" data-msg-id="${s.id}"></span>
@@ -883,9 +915,13 @@
         }
         const s = submissions.find(x => String(x.id) === String(id));
         if(s){ s.status = status; s.response = response; }
+        if(response){
+          historyLog.push({ caseId: Number(id), timestamp: Date.now(), status, response });
+        }
         render();
+        renderAdminCases();
         msgEl.style.color = 'var(--green)';
-        msgEl.textContent = 'Saved ✓';
+        msgEl.textContent = 'Saved ✓ — added to this case\'s history.';
       });
     });
   }
